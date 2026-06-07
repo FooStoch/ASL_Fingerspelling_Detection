@@ -108,7 +108,7 @@ def load_finger_module():
 @st.cache_resource
 def load_finger_model():
     finger = load_finger_module()
-    return finger.load_model("MLP-3.pt")
+    return finger.load_model("MLP_3.pt")
 
 @st.cache_resource
 def load_whisper_model():
