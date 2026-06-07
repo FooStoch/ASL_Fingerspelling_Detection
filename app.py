@@ -108,7 +108,7 @@ def load_finger_module():
 @st.cache_resource
 def load_finger_model():
     finger = load_finger_module()
-    return finger.load_model("MLP_3.pt")
+    return finger.load_model("MLP-3.pt")
 
 @st.cache_resource
 def load_whisper_model():
@@ -222,7 +222,6 @@ def create_finger_processor():
     return FingerProcessor
 
 
-
 # -------------------------
 # Dynamic sign processor
 # -------------------------
@@ -235,8 +234,8 @@ def create_dynamic_processor():
                 min_tracking_confidence=0.7,
             )
             self.buffer = []
-            self.max_frames = int(getattr(asl, "sequence_length", 30))
-            self.last_text = "Sign: waiting..."
+            self.max_frames = 30
+            self.last_text = ""
             self.display_count = 0
             self.predicted_signs = []
 
@@ -250,21 +249,17 @@ def create_dynamic_processor():
         def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
             try:
                 img = frame.to_ndarray(format="bgr24")
-                display = img.copy()
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                _ = self.holistic.process(rgb)
 
-                # IMPORTANT: the ASL helper expects both the frame and the Holistic instance.
-                features, results = asl.extract_landmarks(img, self.holistic)
+                landmarks = asl.extract_landmarks(img)
+                if landmarks is not None:
+                    self.buffer.append(landmarks)
+                    img = asl.draw_landmarks(img, landmarks)
 
-                # Draw pose/face/hands on the current frame.
-                display = asl.draw_results(display, results)
-
-                # Keep a running feature buffer.
-                self.buffer.append(features)
-
-                # Predict once we have a full sequence.
                 if len(self.buffer) >= self.max_frames:
-                    sign, conf = asl.predict_sign(self.buffer[:self.max_frames])
-                    self.last_text = f"Sign: {sign} ({conf * 100:.1f}%)"
+                    sign, conf = asl.predict_sign(self.buffer, asl.model, asl.device)
+                    self.last_text = f"{sign} ({conf * 100:.1f}%)"
                     self.display_count = self.max_frames
                     self.predicted_signs.append(sign)
 
@@ -276,36 +271,25 @@ def create_dynamic_processor():
 
                     self.buffer.clear()
 
-                # Overlay current status.
-                cv2.putText(
-                    display,
-                    f"Frames: {len(self.buffer)}/{self.max_frames}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.75,
-                    (0, 255, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    display,
-                    self.last_text,
-                    (10, display.shape[0] - 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 255, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
-
                 if self.display_count > 0:
+                    cv2.putText(
+                        img,
+                        self.last_text,
+                        (10, img.shape[0] - 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 255, 0),
+                        2,
+                        cv2.LINE_AA,
+                    )
                     self.display_count -= 1
 
-                return av.VideoFrame.from_ndarray(display, format="bgr24")
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
             except Exception:
                 return frame
 
     return DynamicProcessor
+
 
 # -------------------------
 # Mode switching callbacks
@@ -371,7 +355,6 @@ def start_dynamic():
     st.session_state["current_mode"] = "Dynamic Sign"
 
 
-
 def stop_dynamic():
     st.session_state["playing_dynamic"] = False
 
@@ -392,31 +375,10 @@ def stop_dynamic():
         pass
 
     collected = []
-    processor = None
     try:
         ctx = st.session_state.get("webrtc_ctx_dynamic")
         if ctx is not None and getattr(ctx, "video_processor", None) is not None:
-            processor = ctx.video_processor
-            collected += getattr(processor, "predicted_signs", []) or []
-    except Exception:
-        pass
-
-    # Best-effort fallback: if the stream stopped before a full sequence was predicted,
-    # try one last prediction from the buffered frames.
-    try:
-        if not collected and processor is not None:
-            buffered = getattr(processor, "buffer", []) or []
-            seq_len = int(getattr(asl, "sequence_length", 30))
-            if buffered:
-                padded = list(buffered[:seq_len])
-                if len(padded) < seq_len:
-                    pad_frame = np.zeros_like(padded[0])
-                    padded.extend([pad_frame] * (seq_len - len(padded)))
-                try:
-                    sign, _ = asl.predict_sign(padded)
-                    collected.append(sign)
-                except Exception:
-                    pass
+            collected += getattr(ctx.video_processor, "predicted_signs", []) or []
     except Exception:
         pass
 
@@ -475,7 +437,7 @@ def stop_dynamic():
             except Exception:
                 st.session_state["chat_history"].append({"role": "assistant", "text": sentence})
     else:
-        st.session_state["chat_history"].append({"role": "assistant", "text": "No sign detected."})
+        st.session_state["chat_history"].append({"role": "assistant", "text": ""})
 
     st.session_state["dynamic_sequence"] = []
 
@@ -548,7 +510,7 @@ with left_col:
 # -------------------------
 with right_col:
     st.markdown("### Speech-to-Text")
-    st.markdown("**Hit $\\color{red}{\\boxed{\\text{Reset}}}$ when transcription is finished to save memory!**")
+    st.markdown("**Hit $\color{red}{\boxed{\text{Reset}}}$ when transcription is finished to save memory!**")
 
     try:
         from st_audiorec import st_audiorec
