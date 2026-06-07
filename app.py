@@ -510,7 +510,7 @@ with left_col:
 # -------------------------
 with right_col:
     st.markdown("### Speech-to-Text")
-    st.markdown("**Hit $\color{red}{\boxed{\text{Reset}}}$ when transcription is finished to save memory!**")
+    st.markdown("**Hit $\\color{red}{\\boxed{\\text{Reset}}}$ when transcription is finished to save memory!**")
 
     try:
         from st_audiorec import st_audiorec
